@@ -10,12 +10,75 @@ import torch.optim as optim
 import torch.utils.data
 from torch.cuda.amp import autocast, GradScaler
 import numpy as np
+import wandb
+from tqdm.auto import tqdm
+from copy import deepcopy
 
 from utils import CTCLabelConverter, AttnLabelConverter, Averager
 from dataset import hierarchical_dataset, AlignCollate, Batch_Balanced_Dataset
 from model import Model
 from test import validation
+
+from prefetch_generator import BackgroundGenerator
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+important_hparams = [
+    'number',
+    'symbol',
+    'lang_char',
+    # 'experiment_name',
+    'train_data',
+    'valid_data',
+    'manualSeed',
+    # 'workers',
+    'batch_size',
+    # 'num_iter',
+    # 'valInterval',
+    # 'displayInterval',
+    # 'saveInterval',
+    'saved_model',
+    'FT',
+    'optim',
+    'lr',
+    'beta1',
+    'rho',
+    'eps',
+    'grad_clip',
+    'select_data',
+    'batch_ratio',
+    'total_data_usage_ratio',
+    'batch_max_length',
+    'imgH',
+    'imgW',
+    'rgb',
+    'contrast_adjust',
+    'sensitive',
+    'PAD',
+    'data_filtering_off',
+    'Transformation',
+    'FeatureExtraction',
+    'SequenceModeling',
+    'Prediction',
+    'num_fiducial',
+    'input_channel',
+    'output_channel',
+    'hidden_size',
+    'decode',
+    'new_prediction',
+    'freeze_FeatureFxtraction',
+    'freeze_SequenceModeling',
+    'character'
+]
+
+def asciify_dict_recursive(d):
+    if isinstance(d, dict):
+        return {asciify_dict_recursive(k): asciify_dict_recursive(v) for k, v in d.items()}
+    elif isinstance(d, list):
+        return [asciify_dict_recursive(v) for v in d]
+    elif isinstance(d, str):
+        return d.encode('unicode-escape', 'ignore').decode('ascii')
+    else:
+        return d
 
 def count_parameters(model):
     print("Modules, Parameters")
@@ -35,6 +98,12 @@ def train(opt, show_number = 2, amp=False):
         print('Filtering the images containing characters which are not in opt.character')
         print('Filtering the images whose label is longer than opt.batch_max_length')
 
+    wandb.init(
+        project=os.environ.get("WANDB_PROJECT", "easyocr-ehkaam-nid-numbers"),
+        name=opt['experiment_name'],
+        config={k: v for k, v in asciify_dict_recursive(deepcopy(opt)).items() if k in important_hparams},
+        resume=True,
+    )
     opt.select_data = opt.select_data.split('-')
     opt.batch_ratio = opt.batch_ratio.split('-')
     train_dataset = Batch_Balanced_Dataset(opt)
@@ -169,41 +238,23 @@ def train(opt, show_number = 2, amp=False):
     best_norm_ED = -1
     i = start_iter
 
-    scaler = GradScaler()
+    scaler = GradScaler(enabled=amp)
     t1= time.time()
-        
-    while(True):
+    step_start_time = time.time()
+    pbar = tqdm(BackgroundGenerator(train_dataset, 10), 'Training', total=opt['num_iter'])
+    for (image_tensors, labels) in pbar:
+        # print(f'{time.time():.2f}s: loaded data')
+
+        data_duration = time.time() - step_start_time
         # train part
         optimizer.zero_grad(set_to_none=True)
-        
-        if amp:
-            with autocast():
-                image_tensors, labels = train_dataset.get_batch()
-                image = image_tensors.to(device)
-                text, length = converter.encode(labels, batch_max_length=opt.batch_max_length)
-                batch_size = image.size(0)
-
-                if 'CTC' in opt.Prediction:
-                    preds = model(image, text).log_softmax(2)
-                    preds_size = torch.IntTensor([preds.size(1)] * batch_size)
-                    preds = preds.permute(1, 0, 2)
-                    torch.backends.cudnn.enabled = False
-                    cost = criterion(preds, text.to(device), preds_size.to(device), length.to(device))
-                    torch.backends.cudnn.enabled = True
-                else:
-                    preds = model(image, text[:, :-1])  # align with Attention.forward
-                    target = text[:, 1:]  # without [GO] Symbol
-                    cost = criterion(preds.view(-1, preds.shape[-1]), target.contiguous().view(-1))
-            scaler.scale(cost).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            image_tensors, labels = train_dataset.get_batch()
+    
+        # print(f'{time.time():.2f}s: starting model training step')
+        with autocast(enabled=amp):
             image = image_tensors.to(device)
             text, length = converter.encode(labels, batch_max_length=opt.batch_max_length)
             batch_size = image.size(0)
+
             if 'CTC' in opt.Prediction:
                 preds = model(image, text).log_softmax(2)
                 preds_size = torch.IntTensor([preds.size(1)] * batch_size)
@@ -215,11 +266,21 @@ def train(opt, show_number = 2, amp=False):
                 preds = model(image, text[:, :-1])  # align with Attention.forward
                 target = text[:, 1:]  # without [GO] Symbol
                 cost = criterion(preds.view(-1, preds.shape[-1]), target.contiguous().view(-1))
-            cost.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip) 
-            optimizer.step()
-        loss_avg.add(cost)
+            scaler.scale(cost).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        # print(f'{time.time():.2f}s: ending model training step')
 
+        loss_avg.add(cost)
+        model_duration = time.time() - step_start_time
+
+        # log to wandb
+        if i % opt.get('displayInterval', 10) == 0:
+            print(f'[{i}/{opt.num_iter}] Loss: {loss_avg.val():0.5f}, lr: {optimizer.param_groups[0]["lr"]}')
+            wandb.log({"Train Loss": loss_avg.val()}, step=i)
+            # loss_avg.reset()
         # validation part
         if (i % opt.valInterval == 0) and (i!=0):
             print('training time: ', time.time()-t1)
@@ -227,11 +288,13 @@ def train(opt, show_number = 2, amp=False):
             elapsed_time = time.time() - start_time
             # for log
             with open(f'./saved_models/{opt.experiment_name}/log_train.txt', 'a', encoding="utf8") as log:
-                model.eval()
-                with torch.no_grad():
-                    valid_loss, current_accuracy, current_norm_ED, preds, confidence_score, labels,\
-                    infer_time, length_of_data = validation(model, criterion, valid_loader, converter, opt, device)
-                model.train()
+                
+                with autocast(enabled=amp):
+                    model.eval()
+                    with torch.no_grad():
+                        valid_loss, current_accuracy, current_norm_ED, preds, confidence_score, labels,\
+                        infer_time, length_of_data = validation(model, criterion, valid_loader, converter, opt, device)
+                    model.train()
 
                 # training loss and validation loss
                 loss_log = f'[{i}/{opt.num_iter}] Train loss: {loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
@@ -243,14 +306,28 @@ def train(opt, show_number = 2, amp=False):
                 if current_accuracy > best_accuracy:
                     best_accuracy = current_accuracy
                     torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
+                    
+                    try:
+                        wandb.save(f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
+                    except Exception as e:
+                        print(f'wandb save failed: {e}')
+
                 if current_norm_ED > best_norm_ED:
                     best_norm_ED = current_norm_ED
                     torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
+                    
+                    try:
+                        wandb.save(f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
+                    except Exception as e:
+                        print(f'wandb save failed: {e}')
+
+
                 best_model_log = f'{"Best_accuracy":17s}: {best_accuracy:0.3f}, {"Best_norm_ED":17s}: {best_norm_ED:0.4f}'
 
                 loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
                 print(loss_model_log)
                 log.write(loss_model_log + '\n')
+                wandb.log({"Valid Loss": valid_loss, "Valid Accuracy": current_accuracy, "Valid Norm_ED": current_norm_ED}, step=i)
 
                 # show some predicted results
                 dashed_line = '-' * 80
@@ -258,25 +335,50 @@ def train(opt, show_number = 2, amp=False):
                 predicted_result_log = f'{dashed_line}\n{head}\n{dashed_line}\n'
                 
                 #show_number = min(show_number, len(labels))
-                
+                predicted_result_table = []
                 start = random.randint(0,len(labels) - show_number )    
                 for gt, pred, confidence in zip(labels[start:start+show_number], preds[start:start+show_number], confidence_score[start:start+show_number]):
                     if 'Attn' in opt.Prediction:
                         gt = gt[:gt.find('[s]')]
                         pred = pred[:pred.find('[s]')]
+                        predicted_result_table.append([gt, pred, f'{confidence:0.4f}\t{str(pred == gt)}'])
 
                     predicted_result_log += f'{gt:25s} | {pred:25s} | {confidence:0.4f}\t{str(pred == gt)}\n'
                 predicted_result_log += f'{dashed_line}'
                 print(predicted_result_log)
                 log.write(predicted_result_log + '\n')
+                # wandb.log({"Predicted Result": wandb.Html(predicted_result_log.encode('ascii', 'xmlcharrefreplace').decode('ascii'))}, step=i)
+                table = wandb.Table(columns=['Ground Truth', "Prediction", "Confidence Score & T/F"], data=predicted_result_table)
+                wandb.log({"Predicted Result Table": table}, step=i)
+                
                 print('validation time: ', time.time()-t1)
                 t1=time.time()
         # save model per 1e+4 iter.
-        if (i + 1) % 1e+4 == 0:
-            torch.save(
-                model.state_dict(), f'./saved_models/{opt.experiment_name}/iter_{i+1}.pth')
+        if (i + 1) % opt.get('saveInterval', 10000) == 0:
+            save_path = f'./saved_models/{opt.experiment_name}/iter_{i+1}.pth'
+            torch.save(model.state_dict(), save_path)
+            
+            try:
+                wandb.save(save_path)
+            except Exception as e:
+                print(f'wandb save failed: {e}')
+
+
 
         if i == opt.num_iter:
             print('end the training')
+            wandb.finish()
             sys.exit()
+
         i += 1
+        step_duration = time.time() - step_start_time
+        step_start_time = time.time()
+        pbar.set_description(f'[{i}/{opt.num_iter}]')
+        pbar.set_postfix({'TrainLoss': loss_avg.val(), 'Data duration': f'{data_duration / step_duration * 100:0.1f}%', "model duration": f"{model_duration / step_duration * 100:0.1f}%"})
+        pbar.update(1)
+
+        # print percentage of time spent on each part of the training loop
+        # print(f"{'Data Loading':20s}: {data_duration / step_duration * 100:0.1f}%, {'Model Running':20s}: {model_duration / step_duration * 100:0.1f}%")
+        # print(f'{time.time():.2f}s: beginning data load')
+        
+

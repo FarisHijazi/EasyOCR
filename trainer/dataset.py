@@ -12,6 +12,7 @@ import numpy as np
 from torch.utils.data import Dataset, ConcatDataset, Subset
 from torch._utils import _accumulate
 import torchvision.transforms as transforms
+from prefetch_generator import BackgroundGenerator
 
 def contrast_grey(img):
     high = np.percentile(img, 90)
@@ -81,6 +82,7 @@ class Batch_Balanced_Dataset(object):
                 collate_fn=_AlignCollate, pin_memory=True)
             self.data_loader_list.append(_data_loader)
             self.dataloader_iter_list.append(iter(_data_loader))
+        print('self.dataloader_iter_list', self.dataloader_iter_list)
 
         Total_batch_size_log = f'{dashed_line}\n'
         batch_size_sum = '+'.join(batch_size_list)
@@ -92,11 +94,11 @@ class Batch_Balanced_Dataset(object):
         log.write(Total_batch_size_log + '\n')
         log.close()
 
-    def get_batch(self):
+    def __getitem__(self, index):
         balanced_batch_images = []
         balanced_batch_texts = []
 
-        for i, data_loader_iter in enumerate(self.dataloader_iter_list):
+        for i, data_loader_iter in BackgroundGenerator(enumerate(self.dataloader_iter_list), len(self.dataloader_iter_list)):
             try:
                 image, text = data_loader_iter.next()
                 balanced_batch_images.append(image)
