@@ -10,3 +10,8 @@ PyYAML
 Shapely
 pyclipper
 ninja
+pre-commit
+wandb
+prefetch-generator
+natsort
+pandas
