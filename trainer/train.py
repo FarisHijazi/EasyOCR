@@ -20,6 +20,8 @@ from model import Model
 from test import validation
 
 from prefetch_generator import BackgroundGenerator
+from utils import AttrDict
+import warnings
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 important_hparams = [
@@ -98,12 +100,11 @@ def train(opt, show_number = 2, amp=False):
         print('Filtering the images containing characters which are not in opt.character')
         print('Filtering the images whose label is longer than opt.batch_max_length')
 
-    wandb.init(
-        project=os.environ.get("WANDB_PROJECT", "easyocr-ehkaam-nid-numbers"),
-        name=opt['experiment_name'],
-        config={k: v for k, v in asciify_dict_recursive(deepcopy(opt)).items() if k in important_hparams},
-        resume=True,
-    )
+    opt.test_data = opt.get('test_data', 'valid_data')
+    assert os.path.exists(opt["train_data"]), opt["train_data"] + " does not exist"
+    assert os.path.exists(opt["valid_data"]), opt["valid_data"] + " does not exist"
+    assert os.path.exists(opt["test_data"]), opt["test_data"] + " does not exist"
+
     opt.select_data = opt.select_data.split('-')
     opt.batch_ratio = opt.batch_ratio.split('-')
     train_dataset = Batch_Balanced_Dataset(opt)
@@ -116,6 +117,21 @@ def train(opt, show_number = 2, amp=False):
         shuffle=True,  # 'True' to check training progress with validation function.
         num_workers=int(opt.workers), prefetch_factor=512,
         collate_fn=AlignCollate_valid, pin_memory=True)
+
+    if opt.get('test_data', 'valid_data') == opt['valid_data']:
+        test_loader = iter(valid_loader)
+    else:
+        opt_test = AttrDict(deepcopy(opt))
+        opt_test['data_filtering_off'] = True
+        opt_test['batch_ratio'] = 1
+        opt_test['valid_data'] = opt_test['test_data'] 
+        test_dataset, test_dataset_log = hierarchical_dataset(root=opt.test_data, opt=opt_test)
+        print('test_dataset', len(test_dataset))
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=min(32, opt.batch_size),
+            shuffle=True,  # 'True' to check training progress with validation function.
+            num_workers=int(opt.workers), prefetch_factor=512,
+            collate_fn=AlignCollate_valid, pin_memory=True)
     log.write(valid_dataset_log)
     print('-' * 80)
     log.write('-' * 80 + '\n')
@@ -294,6 +310,15 @@ def train(opt, show_number = 2, amp=False):
                     with torch.no_grad():
                         valid_loss, current_accuracy, current_norm_ED, preds, confidence_score, labels,\
                         infer_time, length_of_data = validation(model, criterion, valid_loader, converter, opt, device)
+
+                    if opt.get('test_data', 'valid_data') == opt['valid_data']:
+                        test_loss, test_current_accuracy, test_current_norm_ED, test_preds, test_confidence_score, test_labels,\
+                        test_infer_time, test_length_of_data = valid_loss, current_accuracy, current_norm_ED, preds, confidence_score, labels,\
+                        infer_time, length_of_data
+                    else:
+                        with torch.no_grad():
+                            test_loss, test_current_accuracy, test_current_norm_ED, test_preds, test_confidence_score, test_labels,\
+                            test_infer_time, test_length_of_data = validation(model, criterion, test_loader, converter, opt, device)
                     model.train()
 
                 # training loss and validation loss
