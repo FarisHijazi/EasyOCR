@@ -24,52 +24,13 @@ from utils import AttrDict
 import warnings
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-important_hparams = [
-    'number',
-    'symbol',
-    'lang_char',
-    # 'experiment_name',
-    'train_data',
-    'valid_data',
-    'manualSeed',
-    # 'workers',
-    'batch_size',
-    # 'num_iter',
-    # 'valInterval',
-    # 'displayInterval',
-    # 'saveInterval',
-    'saved_model',
-    'FT',
-    'optim',
-    'lr',
-    'beta1',
-    'rho',
-    'eps',
-    'grad_clip',
-    'select_data',
-    'batch_ratio',
-    'total_data_usage_ratio',
-    'batch_max_length',
-    'imgH',
-    'imgW',
-    'rgb',
-    'contrast_adjust',
-    'sensitive',
-    'PAD',
-    'data_filtering_off',
-    'Transformation',
-    'FeatureExtraction',
-    'SequenceModeling',
-    'Prediction',
-    'num_fiducial',
-    'input_channel',
-    'output_channel',
-    'hidden_size',
-    'decode',
-    'new_prediction',
-    'freeze_FeatureFxtraction',
-    'freeze_SequenceModeling',
-    'character'
+ignore_hparams = [
+    'experiment_name',
+    'workers',
+    'num_iter',
+    'valInterval',
+    'displayInterval',
+    'saveInterval',
 ]
 
 def asciify_dict_recursive(d):
@@ -99,6 +60,7 @@ def train(opt, show_number = 2, amp=False):
     if not opt.data_filtering_off:
         print('Filtering the images containing characters which are not in opt.character')
         print('Filtering the images whose label is longer than opt.batch_max_length')
+
 
     opt.test_data = opt.get('test_data', 'valid_data')
     assert os.path.exists(opt["train_data"]), opt["train_data"] + " does not exist"
@@ -249,6 +211,13 @@ def train(opt, show_number = 2, amp=False):
         except:
             pass
 
+    wandb.init(
+        project=os.environ.get("WANDB_PROJECT", "easyocr-ehkaam-nid-numbers"),
+        name=opt['experiment_name'],
+        config={k: v for k, v in asciify_dict_recursive(deepcopy(opt)).items() if k not in ignore_hparams},
+        resume=True,
+    )
+
     start_time = time.time()
     best_accuracy = -1
     best_norm_ED = -1
@@ -294,7 +263,6 @@ def train(opt, show_number = 2, amp=False):
 
         # log to wandb
         if i % opt.get('displayInterval', 10) == 0:
-            print(f'[{i}/{opt.num_iter}] Loss: {loss_avg.val():0.5f}, lr: {optimizer.param_groups[0]["lr"]}')
             wandb.log({"Train Loss": loss_avg.val()}, step=i)
             # loss_avg.reset()
         # validation part
@@ -335,7 +303,7 @@ def train(opt, show_number = 2, amp=False):
                     try:
                         wandb.save(f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
                     except Exception as e:
-                        print(f'wandb save failed: {e}')
+                        warnings.warn(f'wandb save failed: {e}')
 
                 if current_norm_ED > best_norm_ED:
                     best_norm_ED = current_norm_ED
@@ -344,15 +312,22 @@ def train(opt, show_number = 2, amp=False):
                     try:
                         wandb.save(f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
                     except Exception as e:
-                        print(f'wandb save failed: {e}')
+                        warnings.warn(f'wandb save failed: {e}')
 
 
                 best_model_log = f'{"Best_accuracy":17s}: {best_accuracy:0.3f}, {"Best_norm_ED":17s}: {best_norm_ED:0.4f}'
 
                 loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
-                print(loss_model_log)
+                # print(loss_model_log)
                 log.write(loss_model_log + '\n')
-                wandb.log({"Valid Loss": valid_loss, "Valid Accuracy": current_accuracy, "Valid Norm_ED": current_norm_ED}, step=i)
+                wandb.log({
+                    "Valid Loss": valid_loss,
+                    "Valid Accuracy": current_accuracy,
+                    "Valid Norm_ED": current_norm_ED,
+                    "Test Loss": test_loss,
+                    "Test Accuracy": test_current_accuracy,
+                    "Test Norm_ED": test_current_norm_ED,
+                }, step=i)
 
                 # show some predicted results
                 dashed_line = '-' * 80
@@ -370,13 +345,10 @@ def train(opt, show_number = 2, amp=False):
 
                     predicted_result_log += f'{gt:25s} | {pred:25s} | {confidence:0.4f}\t{str(pred == gt)}\n'
                 predicted_result_log += f'{dashed_line}'
-                print(predicted_result_log)
                 log.write(predicted_result_log + '\n')
                 # wandb.log({"Predicted Result": wandb.Html(predicted_result_log.encode('ascii', 'xmlcharrefreplace').decode('ascii'))}, step=i)
                 table = wandb.Table(columns=['Ground Truth', "Prediction", "Confidence Score & T/F"], data=predicted_result_table)
-                wandb.log({"Predicted Result Table": table}, step=i)
-                
-                print('validation time: ', time.time()-t1)
+                wandb.log({"Validation Result Table": table}, step=i)
                 t1=time.time()
         # save model per 1e+4 iter.
         if (i + 1) % opt.get('saveInterval', 10000) == 0:
@@ -386,7 +358,7 @@ def train(opt, show_number = 2, amp=False):
             try:
                 wandb.save(save_path)
             except Exception as e:
-                print(f'wandb save failed: {e}')
+                warnings.warn(f'wandb save failed: {e}')
 
 
 
