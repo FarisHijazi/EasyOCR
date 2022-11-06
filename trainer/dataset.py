@@ -100,12 +100,12 @@ class Batch_Balanced_Dataset(object):
 
         for i, data_loader_iter in BackgroundGenerator(enumerate(self.dataloader_iter_list), len(self.dataloader_iter_list)):
             try:
-                image, text = data_loader_iter.next()
+                image, text = next(data_loader_iter)
                 balanced_batch_images.append(image)
                 balanced_batch_texts += text
             except StopIteration:
                 self.dataloader_iter_list[i] = iter(self.data_loader_list[i])
-                image, text = self.dataloader_iter_list[i].next()
+                image, text = next(self.dataloader_iter_list[i])
                 balanced_batch_images.append(image)
                 balanced_batch_texts += text
             except ValueError:
@@ -152,7 +152,7 @@ class OCRDataset(Dataset):
         self.nSamples = len(self.df)
 
         if self.opt.data_filtering_off:
-            self.filtered_index_list = [index + 1 for index in range(self.nSamples)]
+            self.filtered_index_list = [index for index in range(self.nSamples)]
         else:
             self.filtered_index_list = []
             for index in range(self.nSamples):
