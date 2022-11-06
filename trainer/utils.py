@@ -362,4 +362,6 @@ class Averager(object):
         res = 0
         if self.n_count != 0:
             res = self.sum / float(self.n_count)
+        if type(res) is torch.Tensor:
+            res = res.cpu().item()
         return res
