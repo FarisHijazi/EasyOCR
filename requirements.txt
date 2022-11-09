@@ -15,3 +15,5 @@ wandb
 prefetch-generator
 natsort
 pandas
+IProgress
+jiwer

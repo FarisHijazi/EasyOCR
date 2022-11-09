@@ -6,13 +6,11 @@ import math
 import torch
 import pandas  as pd
 
-from natsort import natsorted
 from PIL import Image
 import numpy as np
 from torch.utils.data import Dataset, ConcatDataset, Subset
 from torch._utils import _accumulate
 import torchvision.transforms as transforms
-from prefetch_generator import BackgroundGenerator
 
 def contrast_grey(img):
     high = np.percentile(img, 90)
@@ -78,7 +76,7 @@ class Batch_Balanced_Dataset(object):
             _data_loader = torch.utils.data.DataLoader(
                 _dataset, batch_size=_batch_size,
                 shuffle=True,
-                num_workers=int(opt.workers), prefetch_factor=8, persistent_workers=True,
+                num_workers=int(opt.workers), prefetch_factor=2, persistent_workers=True,
                 collate_fn=_AlignCollate, pin_memory=True)
             self.data_loader_list.append(_data_loader)
             self.dataloader_iter_list.append(iter(_data_loader))
@@ -98,7 +96,7 @@ class Batch_Balanced_Dataset(object):
         balanced_batch_images = []
         balanced_batch_texts = []
 
-        for i, data_loader_iter in BackgroundGenerator(enumerate(self.dataloader_iter_list), len(self.dataloader_iter_list)):
+        for i, data_loader_iter in enumerate(self.dataloader_iter_list):
             try:
                 image, text = next(data_loader_iter)
                 balanced_batch_images.append(image)
@@ -116,7 +114,7 @@ class Batch_Balanced_Dataset(object):
         return balanced_batch_images, balanced_batch_texts
 
 
-def hierarchical_dataset(root, opt, select_data='/'):
+def hierarchical_dataset(root, opt, select_data=['/']):
     """ select_data='/' contains all sub-directory of root directory """
     dataset_list = []
     dataset_log = f'dataset_root:    {root}\t dataset: {select_data[0]}'

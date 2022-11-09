@@ -19,9 +19,9 @@ from dataset import hierarchical_dataset, AlignCollate, Batch_Balanced_Dataset
 from model import Model
 from test import validation
 
-from prefetch_generator import BackgroundGenerator
 from utils import AttrDict
 import warnings
+import jiwer
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 ignore_hparams = [
@@ -226,7 +226,7 @@ def train(opt, show_number = 2, amp=False):
     scaler = GradScaler(enabled=amp)
     t1= time.time()
     step_start_time = time.time()
-    pbar = tqdm(BackgroundGenerator(train_dataset, 10), 'Training', total=opt['num_iter'])
+    pbar = tqdm(train_dataset, 'Training', total=opt['num_iter'], initial=start_iter, unit='batch')
     for (image_tensors, labels) in pbar:
         # print(f'{time.time():.2f}s: loaded data')
 
@@ -301,7 +301,9 @@ def train(opt, show_number = 2, amp=False):
                     torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
                     
                     try:
-                        wandb.save(f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
+                        #TODO: learn to save artifacts
+                        # wandb.save(f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
+                        pass
                     except Exception as e:
                         warnings.warn(f'wandb save failed: {e}')
 
@@ -310,7 +312,8 @@ def train(opt, show_number = 2, amp=False):
                     torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
                     
                     try:
-                        wandb.save(f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
+                        # wandb.save(f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
+                        pass
                     except Exception as e:
                         warnings.warn(f'wandb save failed: {e}')
 
@@ -323,10 +326,13 @@ def train(opt, show_number = 2, amp=False):
                 wandb.log({
                     "Valid Loss": valid_loss,
                     "Valid Accuracy": current_accuracy,
+                    "Valid CER": jiwer.cer(labels, preds),
                     "Valid Norm_ED": current_norm_ED,
+
                     "Test Loss": test_loss,
                     "Test Accuracy": test_current_accuracy,
                     "Test Norm_ED": test_current_norm_ED,
+                    "Test CER": jiwer.cer(test_labels, test_preds),
                 }, step=i)
 
                 # show some predicted results
@@ -356,7 +362,8 @@ def train(opt, show_number = 2, amp=False):
             torch.save(model.state_dict(), save_path)
             
             try:
-                wandb.save(save_path)
+                # wandb.save(save_path)
+                pass
             except Exception as e:
                 warnings.warn(f'wandb save failed: {e}')
 
