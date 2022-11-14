@@ -180,12 +180,17 @@ class OCRDataset(Dataset):
         else:
             img = Image.open(img_fpath).convert('L')
 
+        if self.opt.get('flip_image', False):
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+
         if not self.opt.sensitive:
             label = label.lower()
 
         # We only train and evaluate on alphanumerics (or pre-defined character set in train.py)
         out_of_char = f'[^{self.opt.character}]'
         label = re.sub(out_of_char, '', label)
+        if self.opt.get('flip_text', False):
+            label = label[::-1]
 
         return (img, label)
 
