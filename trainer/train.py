@@ -31,6 +31,7 @@ ignore_hparams = [
     'valInterval',
     'displayInterval',
     'saveInterval',
+    'wandb_kwargs',
 ]
 
 def asciify_dict_recursive(d):
@@ -55,7 +56,7 @@ def count_parameters(model):
     print(f"Total Trainable Params: {total_params}")
     return total_params
 
-def train(opt, show_number = 2, amp=False):
+def train(opt, show_number = 2, amp=False, wandb_kwargs={}):
     """ dataset preparation """
     if not opt.data_filtering_off:
         print('Filtering the images containing characters which are not in opt.character')
@@ -215,8 +216,15 @@ def train(opt, show_number = 2, amp=False):
         project=os.environ.get("WANDB_PROJECT", "easyocr-ehkaam-nid-numbers"),
         name=opt['experiment_name'],
         config={k: v for k, v in asciify_dict_recursive(deepcopy(opt)).items() if k not in ignore_hparams},
-        resume=True,
+        **wandb_kwargs
     )
+
+    # # EXPERIMENTAL!!! set global step to start_iter
+    print(f'setting wandb.run._starting_step from {wandb.run._starting_step} to {start_iter}')
+    wandb.run._starting_step = start_iter
+    print(f'setting wandb.run._step from {wandb.run._step} to {start_iter}')
+    wandb.run._step = start_iter
+
 
     start_time = time.time()
     best_accuracy = -1
@@ -266,8 +274,9 @@ def train(opt, show_number = 2, amp=False):
             wandb.log({"Train Loss": loss_avg.val()}, step=i)
             # loss_avg.reset()
         # validation part
-        if (i % opt.valInterval == 0) and (i!=0):
-            print('training time: ', time.time()-t1)
+        isValInterval = (i % opt.valInterval == 0) and (i!=0)
+        if isValInterval:
+            print('Running EVALUATION. training time: ', time.time()-t1)
             t1=time.time()
             elapsed_time = time.time() - start_time
             # for log
@@ -355,7 +364,9 @@ def train(opt, show_number = 2, amp=False):
                 # wandb.log({"Predicted Result": wandb.Html(predicted_result_log.encode('ascii', 'xmlcharrefreplace').decode('ascii'))}, step=i)
                 table = wandb.Table(columns=['Ground Truth', "Prediction", "Confidence Score & T/F"], data=predicted_result_table)
                 wandb.log({"Validation Result Table": table}, step=i)
+                print("Validation time: ", time.time()-t1)
                 t1=time.time()
+
         # save model per 1e+4 iter.
         if (i + 1) % opt.get('saveInterval', 10000) == 0:
             save_path = f'./saved_models/{opt.experiment_name}/iter_{i+1}.pth'
@@ -374,8 +385,11 @@ def train(opt, show_number = 2, amp=False):
             wandb.finish()
             sys.exit()
 
-        i += 1
         step_duration = time.time() - step_start_time
+        if data_duration / step_duration * 100 > 30 and not isValInterval:
+            warnings.warn(f'Warning: Your dataloader is too slow ({data_duration} seconds/iteration).')
+
+        i += 1
         step_start_time = time.time()
         pbar.set_description(f'[{i}/{opt.num_iter}]')
         pbar.set_postfix({'TrainLoss': loss_avg.val(), 'Data duration': f'{data_duration / step_duration * 100:0.1f}%', "model duration": f"{model_duration / step_duration * 100:0.1f}%"})
@@ -384,5 +398,4 @@ def train(opt, show_number = 2, amp=False):
         # print percentage of time spent on each part of the training loop
         # print(f"{'Data Loading':20s}: {data_duration / step_duration * 100:0.1f}%, {'Model Running':20s}: {model_duration / step_duration * 100:0.1f}%")
         # print(f'{time.time():.2f}s: beginning data load')
-        
 
