@@ -29,25 +29,51 @@ def get_config(file_path):
             characters += ''.join(set(all_char))
         characters = sorted(set(characters))
         opt.character= ''.join(characters)
-    else:
+    elif 'character' not in opt:
         opt.character = opt.number + opt.symbol + opt.lang_char
+    print('character:', len(opt.character), opt.character)
+    safety_checks(opt, file_path)
     os.makedirs(f'./saved_models/{opt.experiment_name}', exist_ok=True)
     return opt
 
+def get_fname(fpath):
+    # returns filename without extension
+    return '.'.join(os.path.basename(fpath.rstrip('/').rstrip('\\')).split('.')[:-1])
 
-def safety_checks(opt):
+
+def safety_checks(opt, config_path):
+    intersection = set(opt['number']) & set(opt['lang_char'])
+    assert len(intersection) == 0, f'number and lang_char should not have common characters: {intersection}'
+    intersection = set(opt['symbol']) & set(opt['lang_char'])
+    assert len(intersection) == 0, f'symbol and lang_char should not have common characters: {intersection}'
+    intersection = set(opt['symbol']) & set(opt['number'])
+    assert len(intersection) == 0, f'symbol and number should not have common characters: {intersection}'
+
+    key_blacklist = ['number', 'symbol', 'lang_char', 'character']
+    for k in opt:
+        if type(opt[k]) == str and k not in key_blacklist:
+            opt[k] = opt[k].format(
+                config_path=config_path,
+                config_name=get_fname(config_path),
+                **opt
+            )
+
+    opt['wandb_kwargs'] = opt.get('wandb_kwargs', {})
     try:
         opt['saved_model'] = sorted(glob.glob(opt['saved_model']), key=lambda t: os.stat(t).st_mtime)[-1]
         print('saved_model', opt['saved_model'])
+        opt['wandb_kwargs']['resume'] = True
     except Exception as e:
         print('failed to find saved_model', e, 'falling back to base_model: ', end='')
         opt['saved_model'] = opt['base_model']
         print(opt['base_model'])
         assert os.path.isfile(opt['base_model'])
+        opt['wandb_kwargs']['resume'] = False
 
     assert os.path.isfile(opt["train_data"] + '/labels.csv'), opt["train_data"] + "/labels.csv" + " does not exist"
     assert os.path.isfile(opt["valid_data"] + '/labels.csv'), opt["valid_data"] + "/labels.csv" + " does not exist"
     assert os.path.isfile(opt["test_data"] + '/labels.csv'), opt["test_data"] + "/labels.csv" + " does not exist"
+    assert opt['experiment_name'] == get_fname(config_path), 'Experiment name in config file does not match with the file name'
 
 
 if __name__ == '__main__':
@@ -57,7 +83,7 @@ if __name__ == '__main__':
 
     opt = get_config(args.config)
 
-    safety_checks(opt)
+    # safety_checks(opt, args.config)
 
     # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     wandb.login()
@@ -65,5 +91,5 @@ if __name__ == '__main__':
     cudnn.benchmark = False
     cudnn.deterministic = False
 
-    train(opt, amp=True)
+    train(opt, amp=True, wandb_kwargs=opt['wandb_kwargs'])
 
