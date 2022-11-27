@@ -27,7 +27,7 @@ if __name__ == "__main__":
         "--pyfile", type=str, default="../custom_example.py", help="Path to config file"
     )
     parser.add_argument("--dry_run", action="store_true", help="Dry run")
-    parser.add_argument("--test", action="store_true", help="try to load the OCR")
+    parser.add_argument("--no_test", action="store_true", help="don't test. Test will try to load the OCR")
     args = parser.parse_args()
 
     os.makedirs(os.path.expanduser("~/.EasyOCR/model"), exist_ok=True)
@@ -67,7 +67,8 @@ if __name__ == "__main__":
         )
 
         opt = yaml.safe_load(open(args.config, encoding='utf8'))
-        opt["character_list"] = opt["number"] + opt["symbol"] + opt["lang_char"]
+        opt["character"] = opt.get("character", opt["number"] + opt["symbol"] + opt["lang_char"])
+        opt["character_list"] = opt["character"]
         print('opt["character_list"]', len(opt["character_list"]), opt["character_list"])
         opt["network_params"] = {
             "input_channel": opt["input_channel"],
@@ -83,7 +84,7 @@ if __name__ == "__main__":
             yaml.dump(opt, f)
         # shutil.copy(args.config, os.path.expanduser(f'~/.EasyOCR/user_network/{args.output_name}.yaml'))
 
-        if args.test:
+        if not args.no_test:
             print('testing model')
             import easyocr
 
