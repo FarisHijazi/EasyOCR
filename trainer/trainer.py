@@ -1,7 +1,10 @@
 import os
 import wandb
+import dotenv
 
-os.environ['WANDB_API_KEY'] = "***REMOVED***"
+dotenv.load_dotenv("~/.env") # activate base env
+dotenv.load_dotenv(".env.secrets") # override specific project env
+
 # os.environ['WANDB_NOTEBOOK_NAME'] = "trainer.ipynb"
 os.environ['WANDB_PROJECT'] = "easyocr-ehkaam-nid-numbers"
 os.environ['WANDB_BASE_URL'] = "http://localhost:8080" # using local wandb server
@@ -64,9 +67,8 @@ def safety_checks(opt, config_path):
         print('saved_model', opt['saved_model'])
         opt['wandb_kwargs']['resume'] = True
     except Exception as e:
-        print('failed to find saved_model', e, 'falling back to base_model: ', end='')
+        print(e, 'Failed to find saved_model from', opt['saved_model'], 'falling back to base_model: ', opt['base_model'], end='')
         opt['saved_model'] = opt['base_model']
-        print(opt['base_model'])
         assert os.path.isfile(opt['base_model'])
         opt['wandb_kwargs']['resume'] = False
 
