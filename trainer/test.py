@@ -22,6 +22,9 @@ def validation(model, criterion, evaluation_loader, converter, opt, device):
     infer_time = 0
     valid_loss_avg = Averager()
 
+    labels_all = []
+    preds_str_all = []
+    confidence_score_list_all = []
     for i, (image_tensors, labels) in enumerate(evaluation_loader):
         batch_size = image_tensors.size(0)
         length_of_data = length_of_data + batch_size
@@ -62,6 +65,10 @@ def validation(model, criterion, evaluation_loader, converter, opt, device):
             _, preds_index = preds.max(2)
             preds_str = converter.decode(preds_index, length_for_pred)
             labels = converter.decode(text_for_loss[:, 1:], length_for_loss)
+            if os.path.split(opt.test_data)[-1] == 'id_doe_ar_cropped':
+                import re
+                preds_str = re.sub(r'[^\d//]', '', preds_str)
+                labels = re.sub(r'[^\d//]', '', labels)
 
         infer_time += forward_time
         valid_loss_avg.add(cost)
@@ -105,8 +112,11 @@ def validation(model, criterion, evaluation_loader, converter, opt, device):
                 confidence_score = 0  # for empty pred case, when prune after "end of sentence" token ([s])
             confidence_score_list.append(confidence_score)
             # print(pred, gt, pred==gt, confidence_score)
+        labels_all += list(labels)
+        preds_str_all += list(preds_str)
+        confidence_score_list_all += list(confidence_score_list)
 
     accuracy = n_correct / float(length_of_data) * 100
     norm_ED = norm_ED / float(length_of_data) # ICDAR2019 Normalized Edit Distance
 
-    return valid_loss_avg.val(), accuracy, norm_ED, preds_str, confidence_score_list, labels, infer_time, length_of_data
+    return valid_loss_avg.val(), accuracy, norm_ED, preds_str_all, confidence_score_list_all, labels_all, infer_time, length_of_data

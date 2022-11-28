@@ -213,7 +213,7 @@ def train(opt, show_number = 2, amp=False, wandb_kwargs={}):
             pass
 
     wandb.init(
-        project=os.environ.get("WANDB_PROJECT", "easyocr-ehkaam-nid-numbers"),
+        project=opt.get("project_name", os.environ.get("WANDB_PROJECT", None)),
         name=opt['experiment_name'],
         config={k: v for k, v in asciify_dict_recursive(deepcopy(opt)).items() if k not in ignore_hparams},
         **wandb_kwargs
@@ -274,9 +274,9 @@ def train(opt, show_number = 2, amp=False, wandb_kwargs={}):
             wandb.log({"Train Loss": loss_avg.val()}, step=i)
             # loss_avg.reset()
         # validation part
-        isValInterval = (i % opt.valInterval == 0) and (i!=0)
+        isValInterval = (i % opt.valInterval == 0) # yes I'm running eval on step 0 because I want to see the initial accuracy
         if isValInterval:
-            print('Running EVALUATION. training time: ', time.time()-t1)
+            print("Running EVALUATION. training time: ", time.time() - t1)
             t1=time.time()
             elapsed_time = time.time() - start_time
             # for log
